@@ -1,0 +1,6 @@
+.pio/
+.vscode/
+.history/
+src/generated/
+
+build.log
