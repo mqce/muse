@@ -1,8 +1,20 @@
 #include "face_anim.h"
 
-#include <Arduino.h>
-
 #include "generated/face_assets.h"
+
+#if __has_include(<Arduino.h>)
+#include <Arduino.h>
+#else
+#include "esp_random.h"
+
+static long random(long min, long max)
+{
+    if (max <= min) {
+        return min;
+    }
+    return min + static_cast<long>(esp_random() % static_cast<uint32_t>(max - min));
+}
+#endif
 
 FaceAnimator::FaceAnimator(FaceRenderer& renderer) : renderer_(renderer) {}
 

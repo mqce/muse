@@ -1,0 +1,33 @@
+menu "VOICEVOX"
+
+    config MUSE_VOICEVOX_TTS
+        bool "Speak Muse replies with a LAN VOICEVOX engine"
+        default y
+        help
+            Send each finished reply to a VOICEVOX engine on the local network
+            and play the WAV it returns. When the engine is unreachable, the
+            reply stays on the caption path.
+
+    config MUSE_VOICEVOX_URL
+        string "VOICEVOX base URL"
+        default "http://192.168.1.100:50021"
+        depends on MUSE_VOICEVOX_TTS
+        help
+            No trailing path. The engine must accept connections from the ESP32,
+            not only from localhost.
+
+    config MUSE_VOICEVOX_SPEAKER
+        int "VOICEVOX speaker id"
+        default 10
+        range 0 100
+        depends on MUSE_VOICEVOX_TTS
+
+    config MUSE_VOICEVOX_TIMEOUT_S
+        int "Seconds to wait for the first sample"
+        default 15
+        range 3 60
+        depends on MUSE_VOICEVOX_TTS
+        help
+            If no audio has arrived by then, the reply falls back to captions.
+
+endmenu

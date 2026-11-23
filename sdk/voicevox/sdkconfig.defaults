@@ -1,0 +1,6 @@
+# VOICEVOX settings used by tools/build_muse_sdk.ps1.
+# Edit this file. The next SDK build copies these lines over the generated sdkconfig.
+CONFIG_MUSE_VOICEVOX_TTS=y
+CONFIG_MUSE_VOICEVOX_URL="http://192.168.1.100:50021"
+CONFIG_MUSE_VOICEVOX_SPEAKER=10
+CONFIG_MUSE_VOICEVOX_TIMEOUT_S=15

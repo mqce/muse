@@ -9,7 +9,7 @@
 | 文書 | 内容 |
 | ---- | ---- |
 | [hardware.md](hardware.md) | ボード、機構、電源・配線、ピン割当て |
-| [software.md](software.md) | 状態遷移、表情、ビルド・構成 |
+| [software.md](software.md) | 状態遷移、表情、ビルド・構成（PlatformIO／Muse Gadget SDK） |
 
 ## 構成の概要
 
@@ -21,12 +21,20 @@
 
 ## 開発クイックスタート
 
-PlatformIO でビルド／書き込みする。
+変更内容でビルド経路を分ける（顔だけなら PlatformIO、Muse 連携なら SDK）。エントリポイント:
 
-```bash
-pio run
-pio run -t upload
-pio device monitor
+```powershell
+.\tools\build.ps1 -Mode face          # 顔・状態（速い）
+.\tools\build.ps1 -Mode face-upload
+.\tools\build.ps1 -Mode sdk           # Muse Gadget SDK
+.\tools\build.ps1 -Mode sdk-flash -Port COMx
 ```
 
-詳細は [software.md](software.md) を参照。
+判定ルールは `.cursor/skills/muse-build/SKILL.md`。前提の ESP-IDF は **v6.0.3**。詳細は [software.md](software.md)。
+
+初回 SDK だけ:
+
+```powershell
+git submodule update --init --recursive
+.\tools\build_muse_sdk.ps1
+```

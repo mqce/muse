@@ -1,0 +1,219 @@
+diff --git a/esp32/components/muse/boards/board_waveshare_s3_175c.c b/esp32/components/muse/boards/board_waveshare_s3_175c.c
+index 50e3382..ede2659 100644
+--- a/esp32/components/muse/boards/board_waveshare_s3_175c.c
++++ b/esp32/components/muse/boards/board_waveshare_s3_175c.c
+@@ -31,6 +31,7 @@
+ #include "driver/gpio.h"
+ #include "esp_check.h"
+ #include "esp_lcd_panel_io.h"
++#include "esp_lcd_touch.h"
+ #include "esp_log.h"
+ #include "esp_lv_adapter.h"
+ #include "freertos/FreeRTOS.h"
+@@ -168,6 +169,22 @@ static lv_display_t *display_start(lv_indev_t **touch)
+     return disp;
+ }
+ 
++static bool touch_read(int16_t *x, int16_t *y)
++{
++    if (!s_tp || esp_lcd_touch_read_data(s_tp) != ESP_OK) {
++        return false;
++    }
++    uint16_t tx = 0;
++    uint16_t ty = 0;
++    uint8_t points = 0;
++    if (!esp_lcd_touch_get_coordinates(s_tp, &tx, &ty, NULL, &points, 1) || points == 0) {
++        return false;
++    }
++    *x = (int16_t)tx;
++    *y = (int16_t)ty;
++    return true;
++}
++
+ static bool display_lock(int timeout_ms)
+ {
+     return esp_lv_adapter_lock(timeout_ms) == ESP_OK;
+@@ -296,6 +313,7 @@ static const muse_board_t s_board = {
+     .set_brightness = set_brightness,
+     .panel_sleep = panel_sleep,
+     .display_pause = display_pause,
++    .touch_read = touch_read,
+     .draw_frame = muse_lcd_bands_frame,
+     .audio_init = audio_init,
+     .mic_slot = -1,
+diff --git a/esp32/components/muse/muse_app.c b/esp32/components/muse/muse_app.c
+index 5fa6cd9..ec6662e 100644
+--- a/esp32/components/muse/muse_app.c
++++ b/esp32/components/muse/muse_app.c
+@@ -126,6 +126,10 @@ void muse_app_run(const muse_board_t *board)
+         muse_state_set_caption("%s", "");   /* the button icons say how to talk */
+     }
+ 
++    /* Parent repo's face component (sdk/face). Linked only when that component is in the build. */
++    extern void muse_face_start(void);
++    muse_face_start();
++
+     muse_hatch_start();
+     /* Home Link owns the radios; these just hand it the saved settings. */
+     muse_wifi_apply();
+diff --git a/esp32/components/muse/muse_chat_session.cpp b/esp32/components/muse/muse_chat_session.cpp
+index 17f6643..7bc8861 100644
+--- a/esp32/components/muse/muse_chat_session.cpp
++++ b/esp32/components/muse/muse_chat_session.cpp
+@@ -84,6 +84,23 @@ extern "C" {
+ #include "muse_chat_priv.h"
+ #include "muse_options.h"
+ #include "sdkconfig.h"
++#if CONFIG_MUSE_VOICEVOX_TTS
++enum {
++    VOICEVOX_IDLE = 0,
++    VOICEVOX_RUNNING,
++    VOICEVOX_DONE,
++    VOICEVOX_FAILED,
++};
++extern "C" {
++bool voicevox_tts_start(uint32_t gen, const char *text);
++size_t voicevox_tts_read(uint32_t gen, int16_t *pcm, size_t frames);
++int voicevox_tts_state(uint32_t gen);
++void voicevox_tts_cancel(void);
++void muse_audio_set_volume(int volume);
++}
++static bool s_vv_on;
++static int64_t s_vv_since;
++#endif
+ #if CONFIG_MUSE_REALTIME_VOICE
+ #include "muse_voice_call_priv.h"
+ #endif
+@@ -1123,6 +1140,10 @@ static void turn_finish(void)
+         s_option_sending = false;
+     }
+     turn_reset_streams();
++#if CONFIG_MUSE_VOICEVOX_TTS
++    voicevox_tts_cancel();
++    s_vv_on = false;
++#endif
+     s_turn.phase = P_IDLE;
+     s_turn.dict_id = s_turn.chat_id = 0;
+     s_turn.tts_msg = -1;
+@@ -2151,6 +2172,32 @@ static void start_tts(void)
+          * end. decode() plays it at the speaker's volume, captions following,
+          * and finishes the message once it's drained.
+          */
++#if CONFIG_MUSE_VOICEVOX_TTS
++        const char *say = s_turn.texts && s_turn.texts[i * TEXT_MAX] ? s_turn.texts + i * TEXT_MAX : m.tail;
++        if (say && say[0]) {
++            /* The settings screen is covered by the face, so a saved mute must not drop speech. */
++            if (!muse_settings_speaker_on()) {
++                muse_settings_set_speaker_on(true);
++            }
++            if (muse_settings_volume() <= 0) {
++                muse_settings_set_volume(70);
++            }
++            muse_audio_set_volume(muse_settings_volume());
++            if (voicevox_tts_start(s_turn.gen, say)) {
++                m.pcm_start = s_turn.pcm_out;
++                m.pcm_frames = 0;
++                m.tts = TTS_ACTIVE;
++                s_turn.tts_msg = i;
++                s_turn.silent = false;
++                s_vv_on = true;
++                s_vv_since = now_us();
++                ESP_LOGI(TAG, "speaking message %s via voicevox", m.id);
++                show_reply_start(m);
++                return;
++            }
++            ESP_LOGW(TAG, "voicevox start failed");
++        }
++#endif
+         m.pcm_start = s_turn.pcm_out;
+         /* Paced to the text kept: a reply longer than CAPTION_TEXT shows what
+          * was kept at reading pace, not stretched over the whole reply's time
+@@ -2211,9 +2258,73 @@ static void pace_silently(void)
+     }
+ }
+ 
++#if CONFIG_MUSE_VOICEVOX_TTS
++static void voicevox_fallback(msg_t &m)
++{
++    voicevox_tts_cancel();
++    s_vv_on = false;
++    s_turn.silent = true;
++    size_t shown = s_turn.texts ? CAPTION_LEN(s_turn.texts + s_turn.tts_msg * TEXT_MAX) : m.len;
++    m.pcm_frames = (uint32_t)(shown * MIC_RATE / TEXT_CHARS_PER_S);
++    ESP_LOGW(TAG, "voicevox unavailable, captions only");
++}
++
++static void decode_voicevox(void)
++{
++    if (s_turn.tts_msg < 0) {
++        return;
++    }
++    msg_t &m = s_turn.msgs[s_turn.tts_msg];
++    int16_t buf[256];
++    bool idle = false;
++    for (;;) {
++        size_t room = xStreamBufferSpacesAvailable(s_out) / sizeof(int16_t);
++        if (room > 256) {
++            room = 256;
++        }
++        if (!room) {
++            break;
++        }
++        size_t n = voicevox_tts_read(s_turn.gen, buf, room);
++        if (!n) {
++            idle = true;
++            break;
++        }
++        if (s_turn.gen == s_gen.load()) {
++            xStreamBufferSend(s_out, buf, n * sizeof(int16_t), 0);
++        }
++        s_turn.pcm_out += n;
++    }
++    int st = voicevox_tts_state(s_turn.gen);
++    bool any = s_turn.pcm_out > m.pcm_start;
++    bool timed_out = !any && now_us() - s_vv_since > (int64_t)CONFIG_MUSE_VOICEVOX_TIMEOUT_S * 1000000LL;
++    if ((st == VOICEVOX_FAILED || timed_out) && !any) {
++        voicevox_fallback(m);
++        return;
++    }
++    if (idle && (st == VOICEVOX_DONE || (st == VOICEVOX_FAILED && any))) {
++        m.pcm_end = s_turn.pcm_out;
++        m.pcm_frames = m.pcm_end - m.pcm_start;
++        if (!m.pcm_frames) {
++            voicevox_fallback(m);
++            return;
++        }
++        m.tts = TTS_FINISHED;
++        s_turn.tts_msg = -1;
++        s_vv_on = false;
++    }
++}
++#endif
++
+ /* Decodes buffered MP3 while the reply buffer has room. */
+ static void decode(void)
+ {
++#if CONFIG_MUSE_VOICEVOX_TTS
++    if (s_vv_on) {
++        decode_voicevox();
++        return;
++    }
++#endif
+     if (s_turn.tts_msg < 0) {
+         return;
+     }
+diff --git a/esp32/main/CMakeLists.txt b/esp32/main/CMakeLists.txt
+index 3d957f2..79cfdaa 100644
+--- a/esp32/main/CMakeLists.txt
++++ b/esp32/main/CMakeLists.txt
+@@ -80,6 +80,10 @@ set(GADGET_REQUIRES
+     mbedtls
+     efuse
+     muse
++    # Parent-repo face (EXTRA_COMPONENT_DIRS=sdk). Official UI stays in the binary; the face covers it.
++    face
++    # LAN VOICEVOX replies (sdk/voicevox). muse calls it through externs.
++    voicevox
+     # WebAssembly apps (CONFIG_MUSE_WASM_APPS); without them it builds nothing.
+     muse_apps
+     # The M5Stack CoreMatrix's board support; it builds nothing on other boards.
