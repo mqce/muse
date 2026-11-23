@@ -1,0 +1,3 @@
+# Live voice call settings used by tools/build_muse_sdk.ps1.
+# Edit this file. The next SDK build copies these lines over the generated sdkconfig.
+# CONFIG_MUSE_REALTIME_VOICE is not set

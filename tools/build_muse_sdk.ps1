@@ -24,8 +24,10 @@ $Esp32Dir = Join-Path $SdkRoot "esp32"
 $ExportBat = Join-Path $IdfPath "export.bat"
 $BuildDir = "build-muse-waveshare-s3-175"
 $VoicevoxDefaults = Join-Path $RepoRoot "sdk\voicevox\sdkconfig.defaults"
+$RealtimeDefaults = Join-Path $RepoRoot "sdk\realtime\sdkconfig.defaults"
 $VoicevoxDefaultsPosix = $VoicevoxDefaults -replace '\\', '/'
-$Defaults = "sdkconfig.defaults;devices/sdkconfig.muse;devices/sdkconfig.muse-waveshare-s3-175;$VoicevoxDefaultsPosix"
+$RealtimeDefaultsPosix = $RealtimeDefaults -replace '\\', '/'
+$Defaults = "sdkconfig.defaults;devices/sdkconfig.muse;devices/sdkconfig.muse-waveshare-s3-175;$VoicevoxDefaultsPosix;$RealtimeDefaultsPosix"
 $Patch = Join-Path $RepoRoot "sdk\patches\muse-face.patch"
 $FaceDir = ($RepoRoot + "\sdk") -replace '\\', '/'
 
@@ -41,22 +43,28 @@ if ($Target -eq "app-flash" -and [string]::IsNullOrWhiteSpace($Port)) {
 }
 
 Push-Location $SdkRoot
-git apply --reverse --check --whitespace=nowarn $Patch 2>$null
-if ($LASTEXITCODE -eq 0) {
+$prevEap = $ErrorActionPreference
+$ErrorActionPreference = "Continue"
+git apply --reverse --check --whitespace=nowarn $Patch 2>$null | Out-Null
+$patchAlready = ($LASTEXITCODE -eq 0)
+if ($patchAlready) {
     Write-Host "SDK face patch already applied"
 } else {
-    git apply --check --whitespace=nowarn $Patch
+    git apply --check --whitespace=nowarn $Patch 2>$null | Out-Null
     if ($LASTEXITCODE -ne 0) {
+        $ErrorActionPreference = $prevEap
         Pop-Location
         throw "SDK face patch does not apply. Submodule may have moved."
     }
     git apply --whitespace=nowarn $Patch
     if ($LASTEXITCODE -ne 0) {
+        $ErrorActionPreference = $prevEap
         Pop-Location
         throw "Failed to apply SDK face patch"
     }
     Write-Host "Applied SDK face patch"
 }
+$ErrorActionPreference = $prevEap
 Pop-Location
 
 python (Join-Path $RepoRoot "tools\convert_faces.py")
@@ -69,14 +77,23 @@ if (Test-Path $Sdkconfig) {
     if (-not (Test-Path $VoicevoxDefaults)) {
         throw "VOICEVOX settings missing at $VoicevoxDefaults"
     }
-    $settings = @(Get-Content -LiteralPath $VoicevoxDefaults | Where-Object { $_ -match '^\s*CONFIG_MUSE_VOICEVOX_' })
+    if (-not (Test-Path $RealtimeDefaults)) {
+        throw "Realtime voice settings missing at $RealtimeDefaults"
+    }
+    $settings = @()
+    $settings += Get-Content -LiteralPath $VoicevoxDefaults | Where-Object { $_ -match '^\s*CONFIG_MUSE_VOICEVOX_' }
+    $settings += Get-Content -LiteralPath $RealtimeDefaults | Where-Object { $_ -match '^\s*(?:# )?CONFIG_MUSE_REALTIME_' }
     if ($settings.Count -eq 0) {
-        throw "No CONFIG_MUSE_VOICEVOX_* lines in $VoicevoxDefaults"
+        throw "No CONFIG_MUSE_VOICEVOX_* / CONFIG_MUSE_REALTIME_* lines in defaults"
     }
     $text = [System.IO.File]::ReadAllText($Sdkconfig)
     foreach ($line in $settings) {
         $trimmed = $line.Trim()
-        $key = ($trimmed -split '=', 2)[0]
+        if ($trimmed -match '^#\s*(CONFIG_[A-Z0-9_]+)\s+is not set$') {
+            $key = $Matches[1]
+        } else {
+            $key = ($trimmed -split '=', 2)[0]
+        }
         $pattern = "(?m)^(?:# )?$([regex]::Escape($key))(?:\s.*|=.*)$"
         if ([regex]::IsMatch($text, $pattern)) {
             $text = [regex]::Replace($text, $pattern, $trimmed)
@@ -87,6 +104,7 @@ if (Test-Path $Sdkconfig) {
     $utf8 = New-Object System.Text.UTF8Encoding $false
     [System.IO.File]::WriteAllText($Sdkconfig, $text.Replace("`r`n", "`n"), $utf8)
     Write-Host "Applied VOICEVOX settings from $VoicevoxDefaults"
+    Write-Host "Applied realtime voice settings from $RealtimeDefaults"
 }
 
 $ccacheArgs = ""

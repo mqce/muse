@@ -46,10 +46,14 @@ static const char *TAG = "voicevox";
 
 #define TEXT_CAP 8192
 #define QUERY_CAP (48 * 1024)
-#define URL_CAP 2048
-#define PCM_BYTES (96 * 1024)
+#define URL_CAP 8192                     /* percent-encoded Japanese text in query */
+#define HTTP_RX_BYTES 4096
+#define HTTP_TX_BYTES 8192               /* must hold full /audio_query?...&text= URL */
+#define PCM_BYTES (256 * 1024)           /* ~8 s at 16 kHz mono; absorbs synth gaps */
 #define SENTENCE_CHARS 90
-#define HTTP_TIMEOUT_MS 8000
+#define CHUNK_CHARS 120                  /* pack several sentences per HTTP round-trip */
+#define PREBUFFER_BYTES (16000 * 2 * 1) /* hold playback until ~1 s is queued */
+#define HTTP_TIMEOUT_MS 20000
 
 static SemaphoreHandle_t s_lock;
 static StreamBufferHandle_t s_pcm;
@@ -62,6 +66,7 @@ static char *s_encoded;
 static uint32_t s_seq;
 static uint32_t s_gen;
 static voicevox_state_t s_state = VOICEVOX_IDLE;
+static bool s_primed;
 
 static int utf8_decode(const unsigned char *s, size_t n, uint32_t *cp)
 {
@@ -189,6 +194,32 @@ static size_t take_sentence(const char *s)
     return i;
 }
 
+/* Several sentences in one synthesis so audio_query gaps don't underrun playback. */
+static size_t take_chunk(const char *s)
+{
+    size_t total = 0;
+    size_t chars = 0;
+    size_t len = strlen(s);
+    while (s[total] && chars < CHUNK_CHARS) {
+        size_t n = take_sentence(s + total);
+        if (!n) break;
+        size_t add = 0;
+        size_t i = 0;
+        while (i < n) {
+            uint32_t cp = 0;
+            int k = utf8_decode((const unsigned char *)s + total + i, len - total - i, &cp);
+            if (k <= 0) break;
+            i += (size_t)k;
+            add++;
+        }
+        if (total && chars + add > CHUNK_CHARS) break;
+        total += n;
+        chars += add;
+        if (chars >= CHUNK_CHARS) break;
+    }
+    return total;
+}
+
 static bool job_current(uint32_t seq)
 {
     return s_seq == seq;
@@ -202,7 +233,21 @@ static bool push_pcm(uint32_t seq, const int16_t *pcm, size_t n)
         size_t sent = 0;
         bool current = s_seq == seq;
         if (current) {
-            sent = xStreamBufferSend(s_pcm, pcm + off, (n - off) * sizeof(int16_t), 0);
+            /* Never write a half sample: an odd partial send desyncs int16 PCM
+             * into speech-shaped static for the rest of the stream. */
+            size_t space = xStreamBufferSpacesAvailable(s_pcm) & ~(sizeof(int16_t) - 1);
+            size_t want = (n - off) * sizeof(int16_t);
+            if (want > space) {
+                want = space;
+            }
+            if (want) {
+                sent = xStreamBufferSend(s_pcm, pcm + off, want, 0);
+                /* want is even; an odd return would already have desynced the buffer. */
+                if (sent & 1) {
+                    ESP_LOGW(TAG, "odd pcm send %u", (unsigned)sent);
+                    sent &= ~(sizeof(int16_t) - 1);
+                }
+            }
         }
         xSemaphoreGive(s_lock);
         if (!current) return false;
@@ -421,8 +466,8 @@ static char *audio_query(uint32_t seq, const char *sentence, size_t n)
         .url = s_url,
         .method = HTTP_METHOD_POST,
         .timeout_ms = HTTP_TIMEOUT_MS,
-        .buffer_size = 2048,
-        .buffer_size_tx = 1024,
+        .buffer_size = HTTP_RX_BYTES,
+        .buffer_size_tx = HTTP_TX_BYTES,
     };
     esp_http_client_handle_t client = esp_http_client_init(&cfg);
     if (!client || esp_http_client_open(client, 0) != ESP_OK) {
@@ -460,8 +505,8 @@ static bool synthesize(uint32_t seq, const char *query, bool *produced)
         .url = s_url,
         .method = HTTP_METHOD_POST,
         .timeout_ms = HTTP_TIMEOUT_MS,
-        .buffer_size = 2048,
-        .buffer_size_tx = 1024,
+        .buffer_size = HTTP_RX_BYTES,
+        .buffer_size_tx = HTTP_TX_BYTES,
     };
     esp_http_client_handle_t client = esp_http_client_init(&cfg);
     if (!client) return false;
@@ -531,7 +576,7 @@ static void speak_job(uint32_t seq, const char *text)
     while (ok && *cursor && job_current(seq)) {
         while (*cursor == ' ' || *cursor == '\n') cursor++;
         if (!*cursor) break;
-        size_t n = take_sentence(cursor);
+        size_t n = take_chunk(cursor);
         if (!n) break;
         char *query = audio_query(seq, cursor, n);
         if (!query) {
@@ -543,7 +588,10 @@ static void speak_job(uint32_t seq, const char *text)
         cursor += n;
     }
     xSemaphoreTake(s_lock, portMAX_DELAY);
-    if (s_seq == seq) s_state = (ok || produced) ? VOICEVOX_DONE : VOICEVOX_FAILED;
+    if (s_seq == seq) {
+        s_state = (ok || produced) ? VOICEVOX_DONE : VOICEVOX_FAILED;
+        s_primed = true; /* release any held prebuffer on completion */
+    }
     xSemaphoreGive(s_lock);
 }
 
@@ -564,14 +612,16 @@ static bool ensure_init(void)
 {
     if (s_task) return true;
     s_lock = xSemaphoreCreateMutex();
-    s_pcm = xStreamBufferCreateWithCaps(PCM_BYTES, 2, MALLOC_CAP_SPIRAM);
+    /* +1: CreateWithCaps keeps one byte back; an odd usable length lets a fill
+     * stop halfway through a sample (same fix as hatch s_in). */
+    s_pcm = xStreamBufferCreateWithCaps(PCM_BYTES + 1, 2, MALLOC_CAP_SPIRAM);
     s_text = heap_caps_malloc(TEXT_CAP, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     s_job = heap_caps_malloc(TEXT_CAP, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     s_query = heap_caps_malloc(QUERY_CAP, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     s_url = heap_caps_malloc(URL_CAP, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     s_encoded = heap_caps_malloc(URL_CAP, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (!s_lock || !s_pcm || !s_text || !s_job || !s_query || !s_url || !s_encoded ||
-        xTaskCreate(worker, "voicevox", 16384, NULL, 4, &s_task) != pdPASS) {
+        xTaskCreate(worker, "voicevox", 16384, NULL, 5, &s_task) != pdPASS) {
         ESP_LOGE(TAG, "init failed");
         return false;
     }
@@ -592,6 +642,7 @@ bool voicevox_tts_start(uint32_t gen, const char *text)
     }
     s_gen = gen;
     s_state = VOICEVOX_RUNNING;
+    s_primed = false;
     xStreamBufferReset(s_pcm);
     xSemaphoreGive(s_lock);
     xTaskNotifyGive(s_task);
@@ -604,6 +655,14 @@ size_t voicevox_tts_read(uint32_t gen, int16_t *pcm, size_t frames)
     xSemaphoreTake(s_lock, portMAX_DELAY);
     size_t n = 0;
     if (s_gen == gen) {
+        if (!s_primed) {
+            size_t avail = xStreamBufferBytesAvailable(s_pcm);
+            if (s_state == VOICEVOX_RUNNING && avail < PREBUFFER_BYTES) {
+                xSemaphoreGive(s_lock);
+                return 0;
+            }
+            s_primed = true;
+        }
         n = xStreamBufferReceive(s_pcm, pcm, frames * sizeof(int16_t), 0) / sizeof(int16_t);
     }
     xSemaphoreGive(s_lock);
@@ -626,6 +685,7 @@ void voicevox_tts_cancel(void)
     s_seq++;
     s_gen = 0;
     s_state = VOICEVOX_IDLE;
+    s_primed = false;
     xStreamBufferReset(s_pcm);
     xSemaphoreGive(s_lock);
 }
