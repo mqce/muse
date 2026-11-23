@@ -1,6 +1,5 @@
 """face/*.png を RGB565 + 8bit アルファの C++ ソースに変換する。
 
-PlatformIO の pre スクリプトとして実行されるほか、単体でも実行できる:
     python tools/convert_faces.py
 """
 
@@ -8,18 +7,11 @@ import re
 import sys
 from pathlib import Path
 
-try:
-    Import("env")  # type: ignore[name-defined]  # noqa: F821
-except NameError:
-    env = None
-
 LAYER_PATTERN = re.compile(r"^(bg|eyes_\w+|mouth_\w+)$")
 VALUES_PER_LINE = 16
 
 
 def project_dir() -> Path:
-    if env is not None:
-        return Path(env.subst("$PROJECT_DIR"))
     return Path(__file__).resolve().parent.parent
 
 
@@ -27,9 +19,7 @@ def ensure_pillow() -> None:
     try:
         import PIL  # noqa: F401
     except ImportError:
-        if env is None:
-            sys.exit("Pillow が必要です: pip install pillow")
-        env.Execute('"$PYTHONEXE" -m pip install pillow')
+        sys.exit("Pillow が必要です: pip install pillow")
 
 
 def to_rgb565(r: int, g: int, b: int) -> int:
@@ -163,4 +153,5 @@ def main() -> None:
     print(f"convert_faces: {len(layers)} layers -> {out_dir} ({names})")
 
 
-main()
+if __name__ == "__main__":
+    main()

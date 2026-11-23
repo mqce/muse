@@ -1,6 +1,12 @@
-.pio/
-.vscode/
+# Editor
 .history/
-src/generated/
 
-build.log
+# Python
+__pycache__/
+*.py[cod]
+
+# Local / OS
+.cache/
+.DS_Store
+Thumbs.db
+compile_commands.json

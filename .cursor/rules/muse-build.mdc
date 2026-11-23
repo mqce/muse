@@ -1,0 +1,12 @@
+---
+description: 変更内容に応じた muse のビルド／フラッシュ経路選択
+alwaysApply: true
+---
+
+# muse ビルド
+
+ビルド・書き込み・実機確認の前に、プロジェクトスキル **muse-build**（`.cursor/skills/muse-build/SKILL.md`）を読み、Mode を選んでから `.\tools\build.ps1` を使う。
+
+- Muse Gadget SDK / `sdk/` / 顔結合 → `sdk` / `sdk-app` / `sdk-flash`
+- 実行前に選んだ Mode をユーザーに伝える
+- `fullclean` やビルド dir 削除は明示依頼があるときだけ
