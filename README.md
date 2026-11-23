@@ -9,7 +9,7 @@
 | 文書 | 内容 |
 | ---- | ---- |
 | [hardware.md](hardware.md) | ボード、機構、電源・配線、ピン割当て |
-| [software.md](software.md) | 状態遷移、表情、ビルド・構成（PlatformIO／Muse Gadget SDK） |
+| [software.md](software.md) | 状態遷移、表情、ビルド・構成（Muse Gadget SDK / ESP-IDF） |
 
 ## 構成の概要
 
@@ -19,22 +19,24 @@
 - **入力**：頭タッチセンサー
 - **電源**：USB 5V給電
 
+## リポジトリ構成
+
+| パス | 内容 |
+| ---- | ---- |
+| `sdk/` | Muse Gadget SDK への結合（顔タスク、VOICEVOX、パッチ） |
+| `src/` | 顔描画・アニメ・状態遷移（SDK コンポーネントから参照） |
+| `face/` | 表情 PNG アセット |
+| `third_party/muse-gadget-sdk/` | Muse Gadget SDK（git submodule） |
+| `tools/` | ビルド・顔アセット変換スクリプト |
+
 ## 開発クイックスタート
 
-変更内容でビルド経路を分ける（顔だけなら PlatformIO、Muse 連携なら SDK）。エントリポイント:
-
-```powershell
-.\tools\build.ps1 -Mode face          # 顔・状態（速い）
-.\tools\build.ps1 -Mode face-upload
-.\tools\build.ps1 -Mode sdk           # Muse Gadget SDK
-.\tools\build.ps1 -Mode sdk-flash -Port COMx
-```
-
-判定ルールは `.cursor/skills/muse-build/SKILL.md`。前提の ESP-IDF は **v6.0.3**。詳細は [software.md](software.md)。
-
-初回 SDK だけ:
+Muse Gadget SDK（ESP-IDF **v6.0.3**）でビルドする。
 
 ```powershell
 git submodule update --init --recursive
-.\tools\build_muse_sdk.ps1
+.\tools\build.ps1 -Mode sdk
+.\tools\build.ps1 -Mode sdk-flash -Port COMx
 ```
+
+2 回目以降の増分は `-Mode sdk-app`。Mode の判定は `.cursor/skills/muse-build/SKILL.md`。詳細は [software.md](software.md)。

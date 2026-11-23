@@ -1,41 +1,74 @@
 # museロボット ソフトウェア
 
-PlatformIO（Arduino / ESP32-S3）で顔表示・タッチ入力・状態遷移を動かすファームウェア。
+Muse Gadget SDK（ESP-IDF）上で顔表示・タッチ入力・状態遷移・VOICEVOX 読み上げを動かすファームウェア。
 
 ハードウェア構成は [hardware.md](hardware.md) を参照。
+
+## ディレクトリ構成
+
+| パス | 役割 |
+| ---- | ---- |
+| `sdk/face/` | 顔タスク、IDF ディスプレイ実装（`display_idf.cpp`）、CMake コンポーネント |
+| `sdk/voicevox/` | Muse 返事の VOICEVOX TTS |
+| `sdk/patches/` | SDK submodule への結合パッチ（`muse-face.patch`） |
+| `src/` | 顔レイヤー合成・アニメ・状態遷移、`display.h` API、生成アセット |
+| `face/` | 表情 PNG（`tools/convert_faces.py` が `src/generated/` へ変換） |
+| `third_party/muse-gadget-sdk/` | [muse-gadget-sdk](https://github.com/facebookincubator/muse-gadget-sdk) submodule |
+| `tools/build.ps1` | Mode 付きエントリポイント |
+| `tools/build_muse_sdk.ps1` | パッチ適用・アセット変換・`idf.py` 呼び出し |
+
+タッチ入力はボード API（`muse_board_t::touch_read`）経由。表示は `display.h` の API を `sdk/face/display_idf.cpp` が実装する。
 
 ## ビルド
 
 変更内容に応じて Mode を選ぶ（詳細は `.cursor/skills/muse-build/SKILL.md`）。
 
 ```powershell
-.\tools\build.ps1 -Mode face          # 顔・状態のみ（PlatformIO）
-.\tools\build.ps1 -Mode face-upload   # 上記を実機へ
-.\tools\build.ps1 -Mode sdk           # Muse Gadget SDK（増分・ccache）
-.\tools\build.ps1 -Mode sdk-app       # SDK の app 区画のみ
+.\tools\build.ps1 -Mode sdk           # 初回・構成変更後（ccache 可）
+.\tools\build.ps1 -Mode sdk-app       # 2 回目以降の増分（app 区画）
 .\tools\build.ps1 -Mode sdk-flash -Port COMx
 ```
 
-従来どおり個別コマンドも使える。
+`build_muse_sdk.ps1` 直呼びも可。
 
-```bash
-pio run                 # ビルド
-pio run -t upload       # 書き込み
-pio device monitor      # シリアルモニタ（115200）
+```powershell
+.\tools\build_muse_sdk.ps1
+.\tools\build_muse_sdk.ps1 -IdfPath D:\esp\esp-idf-v6.0.3
+.\tools\build_muse_sdk.ps1 -Target app-flash -Port COMx
 ```
 
-ビルド前に `tools/convert_faces.py` が顔アセットを `src/generated/` へ変換する（SDK 経路ではスクリプト内で実行）。
+ビルド時に次を行う。
 
-## 主なモジュール
+1. `sdk/patches/muse-face.patch` を submodule へ適用（未適用時）
+2. `tools/convert_faces.py` で `face/*.png` → `src/generated/`
+3. `sdk/voicevox/sdkconfig.defaults` を生成済み `sdkconfig` へ反映
+4. `idf.py`（対象ボード Waveshare 1.75、ビルド dir `build-muse-waveshare-s3-175`）
 
-| モジュール | 役割 |
-| ---------- | ---- |
-| `main.cpp` | 初期化・ループ、状態と表情の適用 |
-| `display` | AMOLED 初期化・描画 |
-| `face_renderer` / `face_layer` | 背景＋目＋口のレイヤー合成 |
-| `face_anim` | まばたき・うとうと等のアニメーション |
-| `muse_state` | 通常／眠い／寝ているの状態遷移 |
-| `touch` | 頭タッチ入力 |
+| 項目 | 値 |
+| ---- | -- |
+| 対象ボード | Waveshare ESP32-S3-Touch-AMOLED-1.75（プロファイル `s3n` / `waveshare-s3-175`） |
+| 必要 IDF | **v6.0.3**（例: `C:\esp\esp-idf-v6.0.3`） |
+| 成果物 | `third_party/muse-gadget-sdk/esp32/build-muse-waveshare-s3-175/muse-gadget.bin` |
+
+### 初回セットアップ（Windows）
+
+```powershell
+git submodule update --init --recursive
+
+# ESP-IDF v6.0.3（未導入の場合）
+git clone -b v6.0.3 --depth 1 --recurse-submodules --shallow-submodules https://github.com/espressif/esp-idf.git C:\esp\esp-idf-v6.0.3
+cmd /c "cd /d C:\esp\esp-idf-v6.0.3 && install.bat esp32s3"
+```
+
+SDK トークン未設定でもビルドは通る。実機ペアリング前に [gadgets.muse.ai](https://gadgets.muse.ai/settings/sdk-tokens) のトークンを `CONFIG_GADGET_SDK_TOKEN` へ設定する（`idf.py menuconfig`、または書き込み後にシリアルで `>sdk_token=mgst_…`）。
+
+### 書き込み（参考）
+
+```powershell
+.\tools\build.ps1 -Mode sdk-flash -Port COMx
+# または:
+cmd /c "call C:\esp\esp-idf-v6.0.3\export.bat && cd /d third_party\muse-gadget-sdk\esp32 && idf.py -B build-muse-waveshare-s3-175 -p COMx flash monitor"
+```
 
 ## 状態遷移
 
@@ -56,6 +89,8 @@ pio device monitor      # シリアルモニタ（115200）
 | 眠い | 1分放置で寝る／タッチで通常 |
 | 寝ている | 1分放置で眠い／タッチで通常 |
 
+Muse が listening / thinking / speaking のときはローカル状態より優先し、口パク（しゃべっている）を出す。
+
 ## 顔（表情レイヤー）
 
 表情は目・口のレイヤー組み合わせ。アニメーションは目または口だけを差し替える。
@@ -67,49 +102,8 @@ pio device monitor      # シリアルモニタ（115200）
 | 寝ている | `eyes_closed`, `mouth_default` | なし |
 | しゃべっている | `eyes_default`, `mouth_open1` | 口パク：`mouth_open1` → `mouth_open2` |
 
-## 依存ライブラリ
+## 返事の読み上げ（VOICEVOX）
 
-`platformio.ini` より：
+Muse からの返事はテキストなので、LAN 上の VOICEVOX エンジンで音声にしてスピーカーから出す。URL、話者 ID、タイムアウトは `sdk/voicevox/sdkconfig.defaults` に書く。いまの値は `http://192.168.1.100:50021`、話者 ID 10（雨晴はう・ノーマル）。
 
-- [GFX Library for Arduino](https://github.com/moononournation/Arduino_GFX)
-- [SensorLib](https://github.com/lewisxhe/SensorLib)
-
-## Muse Gadget SDK
-
-[facebookincubator/muse-gadget-sdk](https://github.com/facebookincubator/muse-gadget-sdk) を `third_party/muse-gadget-sdk` に submodule で導入している。ESP-IDF ファームであり、現行の PlatformIO 顔ファームとは別系統。
-
-| 項目 | 値 |
-| ---- | -- |
-| 対象ボード | Waveshare ESP32-S3-Touch-AMOLED-1.75（SDK プロファイル `s3n` / `waveshare-s3-175`） |
-| 必要 IDF | **v6.0.3**（例: `C:\esp\esp-idf-v6.0.3`） |
-| 成果物 | `third_party/muse-gadget-sdk/esp32/build-muse-waveshare-s3-175/muse-gadget.bin` |
-
-### 初回セットアップ（Windows）
-
-```powershell
-git submodule update --init --recursive
-
-# ESP-IDF v6.0.3（未導入の場合）
-git clone -b v6.0.3 --depth 1 --recurse-submodules --shallow-submodules https://github.com/espressif/esp-idf.git C:\esp\esp-idf-v6.0.3
-cmd /c "cd /d C:\esp\esp-idf-v6.0.3 && install.bat esp32s3"
-```
-
-### ビルド
-
-```powershell
-.\tools\build_muse_sdk.ps1
-# 別パスの IDF を使う場合:
-.\tools\build_muse_sdk.ps1 -IdfPath D:\esp\esp-idf-v6.0.3
-```
-
-SDK トークン未設定でもビルドは通るが、実機ペアリング前に [gadgets.muse.ai](https://gadgets.muse.ai/settings/sdk-tokens) のトークンを `CONFIG_GADGET_SDK_TOKEN` へ設定する（`idf.py menuconfig`、または書き込み後にシリアルで `>sdk_token=mgst_…`）。
-
-### 返事の読み上げ（VOICEVOX）
-
-Muse からの返事はテキストなので、LAN 上の VOICEVOX エンジンで音声にしてスピーカーから出す。URL、話者 ID、タイムアウトは `sdk/voicevox/sdkconfig.defaults` に書く。ビルドスクリプトが生成済みの `sdkconfig` へこの内容を上書きしてからコンパイルする。いまの値は `http://192.168.1.100:50021`、話者 ID 10（雨晴はう・ノーマル）。エンジンは localhost だけではなく ESP32 から届くように起動する（`--host 0.0.0.0` など）。Windows ファイアウォールで TCP 50021 を許可し、別の端末から `http://192.168.1.100:50021/version` が開ければよい。届かないときはキャプションだけの表示に戻る。通信は家庭内 LAN の平文 HTTP。
-
-### 書き込み（参考）
-
-```powershell
-cmd /c "call C:\esp\esp-idf-v6.0.3\export.bat && cd /d third_party\muse-gadget-sdk\esp32 && idf.py -B build-muse-waveshare-s3-175 -p COMx flash monitor"
-```
+エンジンは ESP32 から届くように起動する（`--host 0.0.0.0` など）。Windows ファイアウォールで TCP 50021 を許可し、別端末から `http://192.168.1.100:50021/version` が開けばよい。届かないときはキャプション表示に戻る。通信は家庭内 LAN の平文 HTTP。

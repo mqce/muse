@@ -1,15 +1,13 @@
-# Select muse build/flash path by change type (see .cursor/skills/muse-build/SKILL.md).
+# Select muse SDK build/flash path (see .cursor/skills/muse-build/SKILL.md).
 #
 # Usage:
-#   .\tools\build.ps1 -Mode face
-#   .\tools\build.ps1 -Mode face-upload
 #   .\tools\build.ps1 -Mode sdk
 #   .\tools\build.ps1 -Mode sdk-app
 #   .\tools\build.ps1 -Mode sdk-flash -Port COM5
 
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet("face", "face-upload", "sdk", "sdk-app", "sdk-flash")]
+    [ValidateSet("sdk", "sdk-app", "sdk-flash")]
     [string]$Mode,
 
     [string]$IdfPath = "C:\esp\esp-idf-v6.0.3",
@@ -26,16 +24,6 @@ $sdkParams = @{ IdfPath = $IdfPath }
 if ($NoCcache) { $sdkParams.NoCcache = $true }
 
 switch ($Mode) {
-    "face" {
-        Write-Host "Mode=face (PlatformIO build)"
-        pio run
-        if ($LASTEXITCODE -ne 0) { throw "pio run failed with exit code $LASTEXITCODE" }
-    }
-    "face-upload" {
-        Write-Host "Mode=face-upload (PlatformIO upload)"
-        pio run -t upload
-        if ($LASTEXITCODE -ne 0) { throw "pio run -t upload failed with exit code $LASTEXITCODE" }
-    }
     "sdk" {
         Write-Host "Mode=sdk (Muse Gadget SDK full incremental build)"
         & $sdkScript @sdkParams -Target build

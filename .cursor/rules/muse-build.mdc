@@ -7,7 +7,6 @@ alwaysApply: true
 
 ビルド・書き込み・実機確認の前に、プロジェクトスキル **muse-build**（`.cursor/skills/muse-build/SKILL.md`）を読み、Mode を選んでから `.\tools\build.ps1` を使う。
 
-- 顔・表情・状態だけ → `face` / `face-upload`（PlatformIO）。フル SDK を使わない
-- Muse 連携・`sdk/`・SDK 本体 → `sdk` / `sdk-app` / `sdk-flash`
+- Muse Gadget SDK / `sdk/` / 顔結合 → `sdk` / `sdk-app` / `sdk-flash`
 - 実行前に選んだ Mode をユーザーに伝える
 - `fullclean` やビルド dir 削除は明示依頼があるときだけ
