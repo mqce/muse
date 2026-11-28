@@ -1,0 +1,39 @@
+parameters:
+  happiness:  { min: 0, max: 10,  initial: 5 }
+  sleepiness: { min: 0, max: 100, initial: 30 }
+  boredom:    { min: 0, max: 100, initial: 20 }
+
+triggers:
+  HEAD_PET:   { source: head_touch_sensor, pattern: sustained_or_repeated }
+  FACE_TOUCH: { source: head_touch_sensor, pattern: short }
+  CONVERSATION: { source: sdk_mode, pattern: speaking_finished }
+  TICK_1MIN:  { source: timer, interval_sec: 60 }
+  IDLE_10MIN: { source: no_interaction, after_sec: 600, repeat: true, reset_by: [HEAD_PET, FACE_TOUCH, CONVERSATION] }
+
+effects:
+  - { on: HEAD_PET,   do: "happiness += 1; boredom -= 20" }
+  - { on: FACE_TOUCH, do: "boredom -= 10" }
+  - { on: FACE_TOUCH, when: "state == DROWSY", do: "sleepiness -= 10" }
+  - { on: CONVERSATION, do: "sleepiness -= 40; boredom -= 50" }
+  - { on: IDLE_10MIN, do: "happiness -= 3" }
+  - { on: TICK_1MIN,  when: "state in [NORMAL, HAPPY, GRUMPY, DROWSY]", do: "sleepiness += 6; boredom += 12" }
+  - { on: TICK_1MIN,  when: "state == SLEEPING", do: "sleepiness -= 15; boredom -= 15" }
+
+transitions:
+  - { from: NORMAL,   when: "happiness >= 8",   to: HAPPY }
+  - { from: HAPPY,    when: "happiness <= 5",   to: NORMAL }
+  - { from: NORMAL,   when: "happiness == 0 sustained 30min", to: GRUMPY }
+  - { from: GRUMPY,   when: "happiness >= 3",   to: NORMAL }
+  - { from: [NORMAL, HAPPY, GRUMPY], when: "sleepiness >= 70", to: DROWSY }
+  - { from: DROWSY,   when: "sleepiness >= 90", to: SLEEPING }
+  - { from: DROWSY,   when: "sleepiness == 0",  to: NORMAL }
+  - { from: SLEEPING, when: "sleepiness <= 20", to: NORMAL }
+  - { from: ANY_IDLE, when: "sdk_mode in [LISTENING, THINKING, SPEAKING]", to: SDK_MODE, on_return: REEVALUATE }
+  - { from: [NORMAL, HAPPY, GRUMPY, DROWSY], when: "link in [OFFLINE, ERROR] or wifi in [FAILED, NO_NETWORK] or hatch == UNREACHABLE", to: NETWORK_ERROR }
+  - { from: NETWORK_ERROR, when: "link == ONLINE and hatch == REACHABLE", to: REEVALUATE }
+
+overlays:
+  - { name: SELF_PLAY, when: "boredom >= 70 and state in [NORMAL, HAPPY]", behavior: "時々キョロキョロ (顔) / 手パタパタ (サーボ)" }
+  - { name: HAND_FLAP, when: "trigger == HEAD_PET and state == HAPPY", behavior: "手をペンギン式にパタパタ (サーボのみ、顔には出さない)" }
+  - { name: PET_EYES, when: "trigger in [HEAD_PET, FACE_TOUCH]", behavior: "目を >< (eyes_squeeze、エラーと同じ)、口を通常の口 (M1) に固定して短時間差し替え" }
+  - { name: CALL, when: "state == NORMAL and boredom >= 80 sustained 1min", behavior: "「おーい」(事前作成WAV) を再生", repeat_min: 10, until: "boredom < 80 or state != NORMAL" }

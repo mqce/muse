@@ -1,16 +1,17 @@
-# Build the Muse Gadget SDK for Waveshare ESP32-S3-Touch-AMOLED-1.75 (profile s3n).
+# Build / flash the Muse Gadget SDK for Waveshare ESP32-S3-Touch-AMOLED-1.75 (profile s3n).
 # Requires ESP-IDF v6.0.3 (default: C:\esp\esp-idf-v6.0.3).
 #
 # Usage:
 #   .\tools\build_muse_sdk.ps1
 #   .\tools\build_muse_sdk.ps1 -IdfPath D:\esp\esp-idf-v6.0.3
 #   .\tools\build_muse_sdk.ps1 -Target app
+#   .\tools\build_muse_sdk.ps1 -Target flash -Port COM5
 #   .\tools\build_muse_sdk.ps1 -Target app-flash -Port COM5
 #   .\tools\build_muse_sdk.ps1 -NoCcache
 
 param(
     [string]$IdfPath = "C:\esp\esp-idf-v6.0.3",
-    [ValidateSet("build", "app", "app-flash")]
+    [ValidateSet("build", "app", "flash", "app-flash")]
     [string]$Target = "build",
     [string]$Port = "",
     [switch]$NoCcache
@@ -23,6 +24,7 @@ $SdkRoot = Join-Path $RepoRoot "third_party\muse-gadget-sdk"
 $Esp32Dir = Join-Path $SdkRoot "esp32"
 $ExportBat = Join-Path $IdfPath "export.bat"
 $BuildDir = "build-muse-waveshare-s3-175"
+$BuildAbs = Join-Path $Esp32Dir $BuildDir
 $VoicevoxDefaults = Join-Path $RepoRoot "sdk\voicevox\sdkconfig.defaults"
 $RealtimeDefaults = Join-Path $RepoRoot "sdk\realtime\sdkconfig.defaults"
 $VoicevoxDefaultsPosix = $VoicevoxDefaults -replace '\\', '/'
@@ -38,8 +40,31 @@ if (-not (Test-Path $Esp32Dir)) {
     throw "SDK missing at $Esp32Dir. Run: git submodule update --init --recursive"
 }
 
-if ($Target -eq "app-flash" -and [string]::IsNullOrWhiteSpace($Port)) {
-    throw "app-flash requires -Port COMx"
+if (($Target -eq "flash" -or $Target -eq "app-flash") -and [string]::IsNullOrWhiteSpace($Port)) {
+    throw "$Target requires -Port COMx"
+}
+
+# Flash-only: never rebuild, never convert assets, never touch the patch.
+if ($Target -eq "flash") {
+    $bin = Join-Path $BuildAbs "muse-gadget.bin"
+    $argsFile = Join-Path $BuildAbs "app-flash_args"
+    if (-not (Test-Path $bin)) {
+        throw "No firmware at $bin. Build first: .\tools\build.ps1 -Mode sdk"
+    }
+    if (-not (Test-Path $argsFile)) {
+        throw "Missing $argsFile. Build first: .\tools\build.ps1 -Mode sdk"
+    }
+    Write-Host "Flashing existing app (no rebuild) Port=$Port ..."
+    $cmd = @"
+call "$ExportBat" && cd /d "$BuildAbs" && python -m esptool --chip esp32s3 -p $Port -b 460800 --before default-reset --after hard-reset write-flash "@app-flash_args"
+"@
+    cmd /c $cmd
+    if ($LASTEXITCODE -ne 0) {
+        throw "esptool flash failed with exit code $LASTEXITCODE"
+    }
+    Write-Host "OK: flashed $bin"
+    Get-Item $bin | Format-List FullName, Length, LastWriteTime
+    return
 }
 
 Push-Location $SdkRoot
@@ -70,6 +95,11 @@ Pop-Location
 python (Join-Path $RepoRoot "tools\convert_faces.py")
 if ($LASTEXITCODE -ne 0) {
     throw "convert_faces.py failed"
+}
+
+python (Join-Path $RepoRoot "tools\convert_voice.py")
+if ($LASTEXITCODE -ne 0) {
+    throw "convert_voice.py failed"
 }
 
 $Sdkconfig = Join-Path $Esp32Dir "$BuildDir\sdkconfig"

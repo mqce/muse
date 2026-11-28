@@ -3,11 +3,12 @@
 # Usage:
 #   .\tools\build.ps1 -Mode sdk
 #   .\tools\build.ps1 -Mode sdk-app
-#   .\tools\build.ps1 -Mode sdk-flash -Port COM5
+#   .\tools\build.ps1 -Mode flash -Port COM5
+#   .\tools\build.ps1 -Mode sdk-flash -Port COM5   # alias of flash (no rebuild)
 
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet("sdk", "sdk-app", "sdk-flash")]
+    [ValidateSet("sdk", "sdk-app", "flash", "sdk-flash")]
     [string]$Mode,
 
     [string]$IdfPath = "C:\esp\esp-idf-v6.0.3",
@@ -32,11 +33,11 @@ switch ($Mode) {
         Write-Host "Mode=sdk-app (Muse Gadget SDK app-only build)"
         & $sdkScript @sdkParams -Target app
     }
-    "sdk-flash" {
+    { $_ -in @("flash", "sdk-flash") } {
         if ([string]::IsNullOrWhiteSpace($Port)) {
-            throw "sdk-flash requires -Port COMx"
+            throw "$Mode requires -Port COMx"
         }
-        Write-Host "Mode=sdk-flash (Muse Gadget SDK app-flash) Port=$Port"
-        & $sdkScript @sdkParams -Target app-flash -Port $Port
+        Write-Host "Mode=$Mode (flash existing app, no rebuild) Port=$Port"
+        & $sdkScript @sdkParams -Target flash -Port $Port
     }
 }

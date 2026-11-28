@@ -64,6 +64,7 @@ bool FaceRenderer::begin() {
 void FaceRenderer::setExpression(const Expression& expression) {
     expression_ = expression;
     eyesOverride_ = nullptr;
+    mouthOverride_ = nullptr;
     render({0, 0, background_.w, background_.h});
 }
 
@@ -77,8 +78,22 @@ void FaceRenderer::overrideEyes(const FaceLayer* eyes) {
     render(unite(rectOf(before), rectOf(after)));
 }
 
+void FaceRenderer::overrideMouth(const FaceLayer* mouth) {
+    const FaceLayer* before = currentMouth();
+    mouthOverride_ = mouth;
+    const FaceLayer* after = currentMouth();
+    if (before == after) {
+        return;
+    }
+    render(unite(rectOf(before), rectOf(after)));
+}
+
 const FaceLayer* FaceRenderer::currentEyes() const {
     return eyesOverride_ != nullptr ? eyesOverride_ : expression_.eyes;
+}
+
+const FaceLayer* FaceRenderer::currentMouth() const {
+    return mouthOverride_ != nullptr ? mouthOverride_ : expression_.mouth;
 }
 
 void FaceRenderer::render(Rect area) {
@@ -92,7 +107,7 @@ void FaceRenderer::render(Rect area) {
         memcpy(buffer_ + row * area.w, src, area.w * sizeof(uint16_t));
     }
     blend(currentEyes(), area);
-    blend(expression_.mouth, area);
+    blend(currentMouth(), area);
 
     display::push(area.x, area.y, buffer_, area.w, area.h);
 }

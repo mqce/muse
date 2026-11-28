@@ -24,10 +24,12 @@
 | パス | 内容 |
 | ---- | ---- |
 | `sdk/` | Muse Gadget SDK への結合（顔タスク、VOICEVOX、パッチ） |
-| `src/` | 顔描画・アニメ・状態遷移（SDK コンポーネントから参照） |
+| `src/` | 顔描画・アニメ・ムード状態遷移（SDK コンポーネントから参照） |
 | `face/` | 表情 PNG アセット |
+| `voice/` | 固定セリフ WAV |
+| `spec/` | 状態遷移モデル・固定セリフ一覧 |
 | `third_party/muse-gadget-sdk/` | Muse Gadget SDK（git submodule） |
-| `tools/` | ビルド・顔アセット変換スクリプト |
+| `tools/` | ビルド・顔／音声アセット変換スクリプト |
 
 ## 開発クイックスタート
 
@@ -36,7 +38,7 @@ Muse Gadget SDK（ESP-IDF **v6.0.3**）でビルドする。
 ```powershell
 git submodule update --init --recursive
 .\tools\build.ps1 -Mode sdk
-.\tools\build.ps1 -Mode sdk-flash -Port COMx
+.\tools\build.ps1 -Mode flash -Port COMx
 ```
 
-2 回目以降の増分は `-Mode sdk-app`。Mode の判定は `.cursor/skills/muse-build/SKILL.md`。詳細は [software.md](software.md)。
+2 回目以降の増分は `-Mode sdk-app`。書き込みだけは `-Mode flash`（ビルドしない）。Mode の判定は `.cursor/skills/muse-build/SKILL.md`。詳細は [software.md](software.md)。

@@ -7,6 +7,7 @@ alwaysApply: true
 
 ビルド・書き込み・実機確認の前に、プロジェクトスキル **muse-build**（`.cursor/skills/muse-build/SKILL.md`）を読み、Mode を選んでから `.\tools\build.ps1` を使う。
 
-- Muse Gadget SDK / `sdk/` / 顔結合 → `sdk` / `sdk-app` / `sdk-flash`
+- Muse Gadget SDK / `sdk/` / 顔結合 → `sdk` / `sdk-app` / `flash`
+- **「書き込んで」「フラッシュして」→ Mode `flash`（既存 bin のみ。ビルド禁止）**
 - 実行前に選んだ Mode をユーザーに伝える
 - `fullclean` やビルド dir 削除は明示依頼があるときだけ

@@ -2,7 +2,7 @@
 
 Muse Gadget SDK（ESP-IDF）上で顔表示・タッチ入力・状態遷移・VOICEVOX 読み上げを動かすファームウェア。
 
-ハードウェア構成は [hardware.md](hardware.md) を参照。
+ハードウェア構成は [hardware.md](hardware.md) を参照。状態遷移の正本は [spec/state-transition-model-v1.md](spec/state-transition-model-v1.md)。
 
 ## ディレクトリ構成
 
@@ -11,8 +11,10 @@ Muse Gadget SDK（ESP-IDF）上で顔表示・タッチ入力・状態遷移・V
 | `sdk/face/` | 顔タスク、IDF ディスプレイ実装（`display_idf.cpp`）、CMake コンポーネント |
 | `sdk/voicevox/` | Muse 返事の VOICEVOX TTS |
 | `sdk/patches/` | SDK submodule への結合パッチ（`muse-face.patch`） |
-| `src/` | 顔レイヤー合成・アニメ・状態遷移、`display.h` API、生成アセット |
+| `src/` | 顔レイヤー合成・アニメ・ムード状態遷移、固定クリップ再生 API、生成アセット |
 | `face/` | 表情 PNG（`tools/convert_faces.py` が `src/generated/` へ変換） |
+| `voice/` | 固定セリフ WAV（`tools/convert_voice.py` が 16 kHz PCM へ変換） |
+| `spec/` | 状態遷移モデルと固定セリフ一覧 |
 | `third_party/muse-gadget-sdk/` | [muse-gadget-sdk](https://github.com/facebookincubator/muse-gadget-sdk) submodule |
 | `tools/build.ps1` | Mode 付きエントリポイント |
 | `tools/build_muse_sdk.ps1` | パッチ適用・アセット変換・`idf.py` 呼び出し |
@@ -26,7 +28,7 @@ Muse Gadget SDK（ESP-IDF）上で顔表示・タッチ入力・状態遷移・V
 ```powershell
 .\tools\build.ps1 -Mode sdk           # 初回・構成変更後（ccache 可）
 .\tools\build.ps1 -Mode sdk-app       # 2 回目以降の増分（app 区画）
-.\tools\build.ps1 -Mode sdk-flash -Port COMx
+.\tools\build.ps1 -Mode flash -Port COMx   # 既存 bin の書き込みのみ（ビルドしない）
 ```
 
 `build_muse_sdk.ps1` 直呼びも可。
@@ -34,15 +36,16 @@ Muse Gadget SDK（ESP-IDF）上で顔表示・タッチ入力・状態遷移・V
 ```powershell
 .\tools\build_muse_sdk.ps1
 .\tools\build_muse_sdk.ps1 -IdfPath D:\esp\esp-idf-v6.0.3
-.\tools\build_muse_sdk.ps1 -Target app-flash -Port COMx
+.\tools\build_muse_sdk.ps1 -Target flash -Port COMx
 ```
 
 ビルド時に次を行う。
 
 1. `sdk/patches/muse-face.patch` を submodule へ適用（未適用時）
 2. `tools/convert_faces.py` で `face/*.png` → `src/generated/`
-3. `sdk/voicevox/sdkconfig.defaults` を生成済み `sdkconfig` へ反映
-4. `idf.py`（対象ボード Waveshare 1.75、ビルド dir `build-muse-waveshare-s3-175`）
+3. `tools/convert_voice.py` で `voice/*.wav` → `src/generated/`
+4. `sdk/voicevox/sdkconfig.defaults` を生成済み `sdkconfig` へ反映
+5. `idf.py`（対象ボード Waveshare 1.75、ビルド dir `build-muse-waveshare-s3-175`）
 
 | 項目 | 値 |
 | ---- | -- |
@@ -65,42 +68,73 @@ SDK トークン未設定でもビルドは通る。実機ペアリング前に 
 ### 書き込み（参考）
 
 ```powershell
-.\tools\build.ps1 -Mode sdk-flash -Port COMx
-# または:
-cmd /c "call C:\esp\esp-idf-v6.0.3\export.bat && cd /d third_party\muse-gadget-sdk\esp32 && idf.py -B build-muse-waveshare-s3-175 -p COMx flash monitor"
+.\tools\build.ps1 -Mode flash -Port COMx
 ```
 
 ## 状態遷移
 
-放置タイムアウトはいずれも **1分**。タッチで通常に戻る。
+SDK のモード（BOOT / IDLE / LISTENING / THINKING / SPEAKING / ERROR / OFF）を最上位とし、IDLE 配下にムードのサブステートを持つ。詳細・数値は [spec/state-transition-model-v1.md](spec/state-transition-model-v1.md) と [spec/state_model.yaml](spec/state_model.yaml)。
 
-```
-通常
-  └─ 1分放置 → 眠い
-                  ├─ 1分放置 → 寝ている
-                  │               ├─ 1分放置 → 眠い
-                  │               └─ タッチ → 通常
-                  └─ タッチ → 通常
-```
+パラメータ（RAM のみ）:
 
-| 状態 | 遷移条件 |
-| ---- | -------- |
-| 通常 | 1分放置で眠い |
-| 眠い | 1分放置で寝る／タッチで通常 |
-| 寝ている | 1分放置で眠い／タッチで通常 |
+| 名前 | 範囲 | 初期値 |
+| ---- | ---- | ------ |
+| 幸福度 | 0〜10 | 5 |
+| ねむけ | 0〜100 | 30 |
+| たいくつ | 0〜100 | 20 |
 
-Muse が listening / thinking / speaking のときはローカル状態より優先し、口パク（しゃべっている）を出す。
+IDLE サブステート:
+
+| 状態 | 主な入り方 |
+| ---- | ---------- |
+| 通常 | 初期／回復時の再判定 |
+| 幸福 | 幸福度 ≥ 8（出口は ≤ 5） |
+| すねてる | 幸福度 = 0 が 30 分継続 |
+| ねむい | ねむけ ≥ 70 |
+| ねてる | ねむけ ≥ 90（起床は ≤ 20） |
+| 接続エラー | Link / Wi-Fi / Muse 到達の致命状態が 5 秒継続（ねてる間は起きてから判定） |
+
+優先度: `OFF > BOOT > ERROR > LISTENING / THINKING / SPEAKING > IDLE`。会話終了時はパラメータからサブステートを再判定する。
+
+タッチ（画面）:
+
+- 短押し → 顔タッチ（たいくつ −10、ねむいときねむけ −10）
+- 500ms ホールド、または 1.5 秒以内に 3 回タップ → なで（幸福度 +1、たいくつ −20）
+- なで／タッチの瞬間、目 `eyes_squeeze`・口 M1 を約 1.2 秒重ねる
 
 ## 顔（表情レイヤー）
 
-表情は目・口のレイヤー組み合わせ。アニメーションは目または口だけを差し替える。
+レイヤー順は bg → 目 → 口。パーツ名は `face/` の PNG stem。
 
-| 状態 | 基本表情 | アニメーション |
-| ---- | -------- | -------------- |
-| 通常 | `eyes_default`, `mouth_default` | まばたき：`eyes_default` → `eyes_half` → `eyes_closed` |
-| 眠い | `eyes_half`, `mouth_open1` | うとうと：`eyes_half` → `eyes_closed` |
-| 寝ている | `eyes_closed`, `mouth_default` | なし |
-| しゃべっている | `eyes_default`, `mouth_open1` | 口パク：`mouth_open1` → `mouth_open2` |
+| 状態 | 基本表情 | アニメ |
+| ---- | -------- | ------ |
+| 通常 | E1 + M1 | まばたき |
+| 幸福 | E4 + M4 | なし |
+| すねてる | E2 + `mouth_frown` | なし |
+| ねむい | ねむけに応じ E1→E2→E3 + M1 | E1 のあいだは通常と同じまばたき |
+| ねてる | E3 + M1 | なし |
+| 接続エラー / ERROR | `eyes_squeeze` + `mouth_frown` | なし |
+| LISTENING | E3 + M1 | 時々開眼 |
+| THINKING | 上目 + `mouth_flat` | キョロキョロ |
+| SPEAKING | E1 + 口パク M2↔M3 | 150ms 交代 |
+| BOOT / OFF | E3 + M1 | なし |
+
+たいくつ ≥ 70 かつ通常／幸福のとき、時々上目でキョロキョロ（一人遊び）。手パタパタはサーボ未配線のためログのみ。
+
+## 固定セリフ（デバイス内 WAV）
+
+[voice/](voice/) の事前合成 WAV を 16 kHz に変換して埋め込む。TTS サーバー不要。
+
+| クリップ | 発動 |
+| -------- | ---- |
+| `wake_up` | ねてる → 通常 |
+| `happy` | 幸福へ入ったとき |
+| `thinking` | THINKING に入ったとき 1 回（返事音声が来たら途中で止める） |
+| `call` | 通常かつたいくつ ≥ 80 が 1 分継続（以後 10 分間隔） |
+| `touch` | 顔の短タッチ（「わぁ」）1 回 |
+| `giggle` / `ehehe` / `happy` / 無音 | なでたとき 1 回。無音 50%、ふふ 20%、えへへ 20%、happy 10% |
+
+詳細は [spec/fixed-voice-lines.md](spec/fixed-voice-lines.md)。
 
 ## 返事の読み上げ（VOICEVOX）
 
